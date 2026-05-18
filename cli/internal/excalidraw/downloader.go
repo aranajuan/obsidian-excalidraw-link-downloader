@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const maxDownloadBytes = 50 * 1024 * 1024
+
 var httpClient = &http.Client{Timeout: 30 * time.Second}
 
 // Download fetches the Excalidraw scene, decrypts it, and saves it to destDir.
@@ -42,7 +44,7 @@ func Download(link Link, destDir string, force bool) (path string, cached bool, 
 		return "", false, fmt.Errorf("server returned HTTP %d for %s", resp.StatusCode, link.APIURL())
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadBytes))
 	if err != nil {
 		return "", false, fmt.Errorf("read response body: %w", err)
 	}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -142,7 +143,7 @@ func openInBrowser(url string) {
 	case "linux":
 		cmd = exec.Command("xdg-open", url)
 	case "windows":
-		cmd = exec.Command("cmd", "/c", "start", url)
+		cmd = exec.Command("cmd", "/c", "start", "", url)
 	default:
 		return
 	}
@@ -154,7 +155,7 @@ func openInBrowser(url string) {
 // auto-opened to re-broadcast the scene from localStorage.
 func closeBrowserTab(_ string) {
 	if runtime.GOOS != "darwin" {
-		// Linux / Windows: no reliable cross-browser mechanism without extra dependencies.
+		log.Println("Note: Browser tab could not be closed automatically on this OS. Please close it manually.")
 		return
 	}
 
@@ -237,6 +238,7 @@ func waitForSIOConnect(conn *websocket.Conn) error {
 func readUntilBroadcast(conn *websocket.Conn, onFirstInRoom func()) (ciphertext, iv []byte, firstInRoomCalled bool, err error) {
 	var pendingCount int
 	var binFrames [][]byte
+	var accBytes int
 	var isBroadcast bool
 	firstInRoomHandled := false
 
@@ -247,6 +249,10 @@ func readUntilBroadcast(conn *websocket.Conn, onFirstInRoom func()) (ciphertext,
 		}
 
 		if mt == websocket.BinaryMessage {
+			accBytes += len(data)
+			if accBytes > maxDownloadBytes {
+				return nil, nil, firstInRoomHandled, fmt.Errorf("accumulated broadcast data exceeds 50MB limit")
+			}
 			binFrames = append(binFrames, data)
 			if len(binFrames) == pendingCount {
 				if isBroadcast && len(binFrames) >= 2 {
@@ -254,6 +260,7 @@ func readUntilBroadcast(conn *websocket.Conn, onFirstInRoom func()) (ciphertext,
 				}
 				pendingCount = 0
 				binFrames = nil
+				accBytes = 0
 				isBroadcast = false
 			}
 			continue
@@ -274,9 +281,15 @@ func readUntilBroadcast(conn *websocket.Conn, onFirstInRoom func()) (ciphertext,
 				n, e := strconv.Atoi(text[2:dashIdx])
 				if e == nil && n > 0 {
 					pendingCount = n
-					isBroadcast = strings.Contains(text[dashIdx+1:], `"client-broadcast"`)
-					binFrames = nil
-					continue
+					var parts []string
+					if err := json.Unmarshal([]byte(text[dashIdx+1:]), &parts); err == nil && len(parts) > 0 && parts[0] == "client-broadcast" {
+						isBroadcast = true
+					} else {
+						isBroadcast = false
+					}
+				binFrames = nil
+				accBytes = 0
+				continue
 				}
 			}
 		}

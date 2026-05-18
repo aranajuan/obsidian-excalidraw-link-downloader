@@ -7,6 +7,10 @@ const ctx = await esbuild.context({
   bundle: true,
   external: ['obsidian', 'electron', 'codemirror', '@codemirror/*'],
   format: 'cjs',
+  // platform: 'node' is correct for this plugin because room-client.ts
+  // imports 'ws' (Node.js WebSocket library) for custom Origin headers.
+  // Browser WebSocket API doesn't support custom headers.
+  // Do NOT change to 'browser' — it will break room downloads.
   platform: 'node',
   target: 'node16',
   logLevel: 'info',

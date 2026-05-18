@@ -2,13 +2,15 @@
 // Uses Obsidian's requestUrl (bypasses CORS) for #json= links.
 // Uses native WebSocket for #room= links.
 
-import { requestUrl } from 'obsidian';
-import { App } from 'obsidian';
+import { requestUrl, App, Notice } from 'obsidian';
 import { decrypt } from './crypto';
 import { downloadRoom, ErrEmptyCanvas, RoomError } from './room-client';
 import { apiUrl, Link } from './link';
 
 export { ErrEmptyCanvas };
+
+const MAX_ROOM_RETRIES = 5;
+const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024; // 50 MB
 
 export interface DownloadResult {
   /** Vault-relative path where the file was written. */
@@ -27,6 +29,7 @@ export async function download(
   app: App,
   force: boolean,
   notify?: (msg: string) => void,
+  signal?: AbortSignal,
 ): Promise<DownloadResult> {
   const filename = `excalidraw-${link.id}.excalidraw`;
   const destPath = destDir ? `${destDir}/${filename}` : filename;
@@ -37,15 +40,18 @@ export async function download(
   }
 
   const data = link.kind === 'room'
-    ? await downloadRoomWithRetry(link, notify)
-    : await downloadJson(link);
+    ? await downloadRoomWithRetry(link, notify, signal)
+    : await downloadJson(link, signal);
 
   // Ensure the destination directory exists
   if (destDir) {
     await ensureDir(destDir, app);
   }
 
-  await app.vault.adapter.writeBinary(destPath, data.buffer as ArrayBuffer);
+  await app.vault.adapter.writeBinary(
+    destPath,
+    data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
+  );
   return { destPath, cached: false };
 }
 
@@ -60,10 +66,13 @@ export async function download(
 async function downloadRoomWithRetry(
   link: Link,
   notify?: (msg: string) => void,
+  signal?: AbortSignal,
 ): Promise<Uint8Array> {
+  if (signal?.aborted) throw new RoomError("aborted", false);
+
   // Attempt 1
   try {
-    return await downloadRoom(link, notify);
+    return await downloadRoom(link, notify, signal);
   } catch (err) {
     if (!(err instanceof RoomError) || !err.firstInRoom) {
       throw err;
@@ -71,28 +80,69 @@ async function downloadRoomWithRetry(
     // Room was empty — fall through to open browser and retry.
   }
 
-  notify?.('Excalidraw: sala vacía — abriendo browser, reconectando en 10s…');
+  new Notice('Excalidraw: Opening browser to restore room data. If blocked by popup blocker, open this URL manually: ' + link.url, 15_000);
+  notify?.('Excalidraw: empty room — opening browser, reconnecting in 10s…');
   window.open(link.url);
-  await new Promise(r => setTimeout(r, 10_000));
+  await delay(10_000, signal);
 
   // Attempts 2+: browser is in room, no need to open it again.
-  for (let attempt = 2; ; attempt++) {
+  for (let attempt = 2; attempt <= MAX_ROOM_RETRIES; attempt++) {
+    if (signal?.aborted) throw new RoomError("aborted", false);
     try {
-      return await downloadRoom(link, notify);
+      return await downloadRoom(link, notify, signal);
     } catch (err) {
-      notify?.(`Excalidraw: intento ${attempt} — reconectando en 3s…`);
-      await new Promise(r => setTimeout(r, 3_000));
+      notify?.(`Excalidraw: attempt ${attempt} — reconnecting in 3s…`);
+      await delay(3_000, signal);
     }
   }
+  throw new RoomError(`room download failed after ${MAX_ROOM_RETRIES} attempts`, false);
 }
 
-async function downloadJson(link: Link): Promise<Uint8Array> {
+async function downloadJson(link: Link, signal?: AbortSignal): Promise<Uint8Array> {
   const url = apiUrl(link);
-  const resp = await requestUrl({ url, method: 'GET' });
-  if (resp.status !== 200) {
-    throw new Error(`HTTP ${resp.status} fetching ${url}`);
+  const MAX_ATTEMPTS = 4;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const fetchPromise = requestUrl({ url, method: 'GET' });
+      const resp = signal
+        ? await Promise.race([
+            fetchPromise,
+            new Promise<never>((_, reject) => {
+              if (signal.aborted) {
+                reject(new Error("aborted"));
+                return;
+              }
+              signal.addEventListener('abort', () => reject(new Error("aborted")), { once: true });
+            }),
+          ])
+        : await fetchPromise;
+      if (resp.status !== 200) {
+        throw new Error(`HTTP ${resp.status} fetching ${url}`);
+      }
+      if (resp.arrayBuffer.byteLength > MAX_DOWNLOAD_BYTES) {
+        throw new Error(`response too large: ${resp.arrayBuffer.byteLength} bytes, max ${MAX_DOWNLOAD_BYTES}`);
+      }
+      return decrypt(link.key, resp.arrayBuffer);
+    } catch (err) {
+      if (attempt === MAX_ATTEMPTS) throw err;
+      await delay(Math.pow(2, attempt - 1) * 1000, signal);
+    }
   }
-  return decrypt(link.key, resp.arrayBuffer);
+  throw new Error('unreachable');
+}
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new RoomError("aborted", false));
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timer);
+      reject(new RoomError("aborted", false));
+    }, { once: true });
+  });
 }
 
 async function ensureDir(path: string, app: App): Promise<void> {

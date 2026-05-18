@@ -56,7 +56,7 @@ export function buildAnnotation(filename: string): string {
 
 export const ANNOTATION_WARNING       = '(⚠ download failed)';
 export const ANNOTATION_REFRESH_FAILED = '(⚠ refresh failed)';
-export const ANNOTATION_EMPTY_CANVAS  = '(⚠ canvas vacío — pedile al autor que abra la sala cuando corras el downloader)';
+export const ANNOTATION_EMPTY_CANVAS  = '(⚠ empty canvas — ask the author to open the room, then re-run the downloader)';
 
 /**
  * Checks if the first occurrence of url in content already has a local-copy annotation.

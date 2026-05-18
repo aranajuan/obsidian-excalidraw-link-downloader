@@ -1,5 +1,6 @@
 import {
   App,
+  normalizePath,
   Notice,
   Plugin,
   PluginSettingTab,
@@ -32,6 +33,8 @@ const DEFAULT_SETTINGS: Settings = {
 
 export default class ExcalidrawDownloaderPlugin extends Plugin {
   settings!: Settings;
+  private abortController = new AbortController();
+  private progressNotice: Notice | undefined;
 
   async onload() {
     await this.loadSettings();
@@ -57,16 +60,23 @@ export default class ExcalidrawDownloaderPlugin extends Plugin {
     this.addSettingTab(new ExcalidrawDownloaderSettingTab(this.app, this));
   }
 
+  onunload() {
+    this.progressNotice?.hide();
+    this.progressNotice = undefined;
+    this.abortController.abort();
+  }
+
   // ── Core processing ────────────────────────────────────────────────────────
 
   private attachmentFolderPath(): string {
     if (this.settings.attachmentFolderOverride) {
-      return this.settings.attachmentFolderOverride;
+      return normalizePath(this.settings.attachmentFolderOverride);
     }
-    return (this.app.vault as any).getConfig?.('attachmentFolderPath') ?? '';
+    return this.app.getConfig('attachmentFolderPath') ?? '';
   }
 
   async processFile(file: TFile, refresh: boolean): Promise<void> {
+    const signal = this.abortController.signal;
     const content = await this.app.vault.read(file);
     const links = parseAll(content, refresh);
 
@@ -92,20 +102,19 @@ export default class ExcalidrawDownloaderPlugin extends Plugin {
     let downloaded = 0, cached = 0, empty = 0, errors = 0, refreshFailed = 0;
 
     for (const link of links) {
-      let progressNotice: Notice | undefined;
       const notify = (msg: string) => {
-        progressNotice?.hide();
-        progressNotice = new Notice(msg, 0); // 0 = no auto-dismiss
+        this.progressNotice?.hide();
+        this.progressNotice = new Notice(msg, 10_000); // 10s auto-dismiss
       };
 
       try {
-        const result = await download(link, destDir, this.app, refresh, notify);
-        progressNotice?.hide();
+        const result = await download(link, destDir, this.app, refresh, notify, signal);
+        this.progressNotice?.hide();
         const filename = result.destPath.split('/').pop()!;
         annotations.set(link.url, buildAnnotation(filename));
         result.cached ? cached++ : downloaded++;
       } catch (err) {
-        progressNotice?.hide();
+        this.progressNotice?.hide();
         if (err === ErrEmptyCanvas) {
           annotations.set(link.url, ANNOTATION_EMPTY_CANVAS);
           empty++;
@@ -113,11 +122,15 @@ export default class ExcalidrawDownloaderPlugin extends Plugin {
           annotations.set(link.url, ANNOTATION_REFRESH_FAILED);
           refreshFailed++;
           console.warn(`[Excalidraw Downloader] refresh failed for ${link.id}:`, err);
+          new Notice(`Excalidraw: refresh failed for link — see console for details`, 5_000);
         } else {
           annotations.set(link.url, ANNOTATION_WARNING);
           errors++;
           console.error(`[Excalidraw Downloader] download failed for ${link.id}:`, err);
+          new Notice(`Excalidraw: download failed for link — see console for details`, 5_000);
         }
+      } finally {
+        this.progressNotice?.hide();
       }
     }
 

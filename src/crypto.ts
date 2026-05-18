@@ -12,7 +12,7 @@ function base64urlDecode(s: string): Uint8Array {
 
 async function importKey(keyStr: string): Promise<CryptoKey> {
   const keyBytes = base64urlDecode(keyStr);
-  return crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['decrypt']);
+  return crypto.subtle.importKey('raw', keyBytes as BufferSource, { name: 'AES-GCM' }, false, ['decrypt']);
 }
 
 /**

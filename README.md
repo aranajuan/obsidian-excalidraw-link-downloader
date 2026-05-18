@@ -2,6 +2,8 @@
 
 Obsidian plugin that downloads Excalidraw shared scenes and collaborative rooms to local `.excalidraw` files, with automatic annotation so you can open them directly from your notes.
 
+> ⚠️ **Desktop Only** — This plugin requires Electron (it uses WebSocket connections and `window.open()`), and is not available on mobile.
+
 ---
 
 ## Why?
@@ -16,10 +18,9 @@ This plugin creates permanent local backups and annotates your notes so the draw
 
 ## Installation
 
-**Option 1: Community Plugins (Recommended)**
-1. Open **Settings → Community Plugins**
-2. Search for "Excalidraw Link Downloader"
-3. Click Install
+**Option 1: Community Plugins (Pending Approval)**
+
+Once approved, you can install from Community Plugins. Until then, install via BRAT or manual installation:
 
 **Option 2: BRAT (Beta)**
 1. Install the [BRAT](https://obsidian.md/plugins?id=obsidian42-brat) plugin
@@ -54,20 +55,31 @@ Your notes transform from:
 To:
 
 ```
-[diseño del sistema](https://excalidraw.com/#room=abc123,KEY) ([local copy 18/05/2026](_resources/excalidraw-abc123.excalidraw))
+[diseño del sistema](https://excalidraw.com/#room=abc123,KEY) ([[excalidraw-abc123.excalidraw|local copy 18/05/2026]])
 ```
 
-Click the local copy link to open the drawing directly in Obsidian (requires [Embedded Notes](https://github.com/obsidian-community/obsidian-embedded-notes) or similar plugin for `.excalidraw` rendering, or simply Ctrl+click to open as text).
+Click the wikilink annotation to open the drawing directly in Obsidian (`.excalidraw` files render natively in recent versions, or use [Embedded Notes](https://github.com/obsidian-community/obsidian-embedded-notes) for older setups).
+
+### Screenshots
+
+**Before and After:**
+
+![Before and after running the downloader](screenshots/before-after.png)
+
+**Settings:**
+
+![Plugin settings tab](screenshots/settings.png)
 
 ### Error handling
 
-If a download fails (expired room, network error), the annotation shows a warning:
+If a download fails or the room is empty, the annotation shows an error marker:
 
-```
-https://excalidraw.com/#room=abc,KEY (⚠ download failed)
-```
-
-Retrying later may succeed if the room is reopened.
+| Annotation | Meaning |
+|-----------|---------|
+| `([[excalidraw-ID.excalidraw\|local copy DD/MM/YYYY]])` | Successfully downloaded |
+| `(⚠ download failed)` | Download failed, no local copy exists |
+| `(⚠ refresh failed)` | Refresh failed, but old local copy is preserved |
+| `(⚠ empty canvas — ask the author to open the room, then re-run the downloader)` | Room was empty when checked — ask the room author to open it |
 
 ---
 
@@ -109,6 +121,13 @@ Running the download multiple times is safe:
 - Failed links are retried
 
 Use **Refresh** to force re-download and update the date.
+
+## Known Limitations
+
+- **Desktop Only**: This plugin is not available on mobile — it relies on Electron's Node.js runtime for WebSocket connections.
+- **Browser Tab Required**: Downloading `#room=` (collaborative) links opens your browser to restore the scene from localStorage. A popup blocker may prevent this — a Notice with the URL is shown as fallback.
+- **Rate Limits**: Excalidraw may rate-limit requests. If downloads fail, wait a few minutes and try again.
+- **Empty Rooms**: If a room has no active participants, the download will return an "empty canvas" annotation. Ask the author to open the room and re-run the downloader.
 
 ---
 

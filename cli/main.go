@@ -16,7 +16,7 @@ import (
 
 func printHelp(bin string) {
 	fmt.Printf(`Usage:
-  %s [--refresh] <vault-root> [process-path]
+  %s [--refresh] [--yes] <vault-root> [process-path]
 
 Arguments:
   vault-root     Root directory of the Obsidian vault (.obsidian/ must exist here).
@@ -28,6 +28,9 @@ Flags:
                  date in every ([local copy DATE](...)) annotation. Also retries
                  links that previously failed. If a re-download fails, the
                  existing local file and annotation are kept unchanged.
+  --yes, -y      Skip confirmation prompts (for scripting). When set, reads
+                 attachment config from .obsidian/app.json if available, or
+                 falls back to a '_resources' folder in the vault root.
 
 What it does:
   Walks all .md files under process-path, finds Excalidraw URLs
@@ -81,12 +84,15 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Extract --refresh flag, leaving positional args intact.
+	// Extract --refresh and --yes flags, leaving positional args intact.
 	refresh := false
+	yes := false
 	positional := os.Args[:1]
 	for _, arg := range os.Args[1:] {
 		if arg == "--refresh" {
 			refresh = true
+		} else if arg == "--yes" || arg == "-y" {
+			yes = true
 		} else {
 			positional = append(positional, arg)
 		}
@@ -126,19 +132,27 @@ func main() {
 	}
 
 	scanner := bufio.NewScanner(os.Stdin)
-	mode, folderName, description := resolveAttachmentConfig(vaultPath, scanner)
+	var mode injector.AttachmentMode
+	var folderName, description string
+	if yes {
+		mode, folderName, description = resolveAttachmentConfigNonInteractive(vaultPath)
+	} else {
+		mode, folderName, description = resolveAttachmentConfig(vaultPath, scanner)
+	}
 
 	fmt.Printf("Vault:            %s\n", vaultPath)
 	if processPath != vaultPath {
 		fmt.Printf("Processing:       %s\n", processPath)
 	}
 	fmt.Printf("Resources folder: %s\n", description)
-	fmt.Printf("Proceed? [y/N] ")
 
-	scanner.Scan()
-	if answer := strings.TrimSpace(strings.ToLower(scanner.Text())); answer != "y" && answer != "yes" {
-		fmt.Println("Aborted.")
-		os.Exit(0)
+	if !yes {
+		fmt.Printf("Proceed? [y/N] ")
+		scanner.Scan()
+		if answer := strings.TrimSpace(strings.ToLower(scanner.Text())); answer != "y" && answer != "yes" {
+			fmt.Println("Aborted.")
+			os.Exit(0)
+		}
 	}
 
 	logPath := filepath.Join(vaultPath, "_excalidraw-downloader.log")
@@ -186,7 +200,7 @@ func resolveAttachmentConfig(vaultPath string, scanner *bufio.Scanner) (injector
 	appJSON := filepath.Join(vaultPath, ".obsidian", "app.json")
 	data, err := os.ReadFile(appJSON)
 	if err != nil {
-		fmt.Println("No se encontró .obsidian/app.json.")
+		fmt.Println(".obsidian/app.json not found.")
 		return promptAttachmentConfig(scanner)
 	}
 
@@ -194,8 +208,29 @@ func resolveAttachmentConfig(vaultPath string, scanner *bufio.Scanner) (injector
 		AttachmentFolderPath string `json:"attachmentFolderPath"`
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		fmt.Println("No se pudo leer .obsidian/app.json.")
+		fmt.Println("Could not read .obsidian/app.json.")
 		return promptAttachmentConfig(scanner)
+	}
+
+	return parseAttachmentFolderPath(cfg.AttachmentFolderPath)
+}
+
+// resolveAttachmentConfigNonInteractive reads .obsidian/app.json if available,
+// otherwise falls back to a fixed _resources folder. Used with --yes flag.
+func resolveAttachmentConfigNonInteractive(vaultPath string) (injector.AttachmentMode, string, string) {
+	appJSON := filepath.Join(vaultPath, ".obsidian", "app.json")
+	data, err := os.ReadFile(appJSON)
+	if err != nil {
+		fmt.Println(".obsidian/app.json not found, using default '_resources' folder.")
+		return injector.ModeFixedFolder, "_resources", "_resources/  (default)"
+	}
+
+	var cfg struct {
+		AttachmentFolderPath string `json:"attachmentFolderPath"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		fmt.Println("Could not read .obsidian/app.json, using default '_resources' folder.")
+		return injector.ModeFixedFolder, "_resources", "_resources/  (default)"
 	}
 
 	return parseAttachmentFolderPath(cfg.AttachmentFolderPath)
@@ -205,14 +240,14 @@ func resolveAttachmentConfig(vaultPath string, scanner *bufio.Scanner) (injector
 // the selected mode, folder name, and a human-readable description.
 func promptAttachmentConfig(scanner *bufio.Scanner) (injector.AttachmentMode, string, string) {
 	fmt.Println()
-	fmt.Println("Selecciona el modo de carpeta de attachments (igual que en Obsidian Settings → Files & Links):")
+	fmt.Println("Select attachment folder mode (same as Obsidian Settings → Files & Links):")
 	fmt.Println()
-	fmt.Println("  1) Vault root         — raíz del vault")
-	fmt.Println("  2) Carpeta fija       — carpeta específica en la raíz (ej: _resources)")
-	fmt.Println("  3) Misma carpeta      — misma carpeta que cada nota")
-	fmt.Println("  4) Subcarpeta         — subcarpeta relativa a cada nota (ej: _resources)")
+	fmt.Println("  1) Vault root         — vault root")
+	fmt.Println("  2) Fixed folder       — specific folder in vault root (e.g. _resources)")
+	fmt.Println("  3) Same folder        — same folder as each note")
+	fmt.Println("  4) Subfolder          — subfolder relative to each note (e.g. _resources)")
 	fmt.Println()
-	fmt.Printf("Selección [1-4]: ")
+	fmt.Printf("Selection [1-4]: ")
 
 	scanner.Scan()
 	choice := strings.TrimSpace(scanner.Text())
@@ -221,7 +256,7 @@ func promptAttachmentConfig(scanner *bufio.Scanner) (injector.AttachmentMode, st
 	case "1":
 		return injector.ModeVaultRoot, "", "vault root"
 	case "2":
-		fmt.Printf("Nombre de la carpeta (ej: _resources): ")
+		fmt.Printf("Folder name (e.g. _resources): ")
 		scanner.Scan()
 		name := strings.TrimSpace(scanner.Text())
 		if name == "" {
@@ -231,9 +266,9 @@ func promptAttachmentConfig(scanner *bufio.Scanner) (injector.AttachmentMode, st
 		_, _, desc := parseAttachmentFolderPath("/" + name)
 		return injector.ModeFixedFolder, name, desc
 	case "3":
-		return injector.ModeSameAsNote, "", "misma carpeta que cada nota"
+		return injector.ModeSameAsNote, "", "same folder as each note"
 	case "4":
-		fmt.Printf("Nombre de la subcarpeta (ej: _resources): ")
+		fmt.Printf("Subfolder name (e.g. _resources): ")
 		scanner.Scan()
 		name := strings.TrimSpace(scanner.Text())
 		if name == "" {
@@ -243,7 +278,7 @@ func promptAttachmentConfig(scanner *bufio.Scanner) (injector.AttachmentMode, st
 		_, _, desc := parseAttachmentFolderPath("./" + name)
 		return injector.ModeSubfolder, name, desc
 	default:
-		fmt.Println("Opción inválida, usando carpeta fija '_resources'.")
+		fmt.Println("Invalid selection, using fixed folder '_resources'.")
 		return injector.ModeFixedFolder, "_resources", "_resources/  (attachmentFolderPath=\"/_resources\")"
 	}
 }
@@ -268,12 +303,12 @@ func parseAttachmentFolderPath(p string) (injector.AttachmentMode, string, strin
 
 	case p == "./" || p == ".":
 		return injector.ModeSameAsNote, "",
-			fmt.Sprintf("misma carpeta que cada nota  (attachmentFolderPath=%q)", p)
+			fmt.Sprintf("same folder as each note  (attachmentFolderPath=%q)", p)
 
 	case strings.HasPrefix(p, "./"):
 		name := p[2:]
 		return injector.ModeSubfolder, name,
-			fmt.Sprintf("%s/ relativo a cada nota  (attachmentFolderPath=%q)", name, p)
+			fmt.Sprintf("%s/ relative to each note  (attachmentFolderPath=%q)", name, p)
 
 	default:
 		// Plain name with no prefix — treated as fixed folder at vault root.

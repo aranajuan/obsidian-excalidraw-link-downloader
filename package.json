@@ -1,10 +1,14 @@
 {
   "name": "excalidraw-link-downloader",
   "version": "1.0.0",
+  "description": "Downloads Excalidraw shared scenes and rooms to local .excalidraw files and annotates your notes with local-copy links",
+  "license": "MIT",
+  "author": "Juan Arana",
   "private": true,
   "scripts": {
     "dev": "node esbuild.config.mjs",
-    "build": "node esbuild.config.mjs production"
+    "build": "node esbuild.config.mjs production",
+    "test": "vitest run"
   },
   "dependencies": {
     "ws": "^8.18.0"
@@ -13,7 +17,8 @@
     "@types/node": "^20.0.0",
     "@types/ws": "^8.5.0",
     "esbuild": "^0.21.0",
-    "obsidian": "latest",
-    "typescript": "^5.0.0"
+    "obsidian": "^1.4.0",
+    "typescript": "^5.0.0",
+    "vitest": "^4.1.6"
   }
 }

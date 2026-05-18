@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	annotationWarning     = "(⚠ download failed)"
-	annotationEmptyCanvas = "(⚠ canvas vacío — pedile al autor que abra la sala cuando corras el downloader)"
+	annotationWarning        = "(⚠ download failed)"
+	annotationEmptyCanvas    = "(⚠ empty canvas — ask the author to open the room, then re-run the downloader)"
+	annotationRefreshFailed  = "(⚠ refresh failed)"
 )
 
 // AttachmentMode mirrors Obsidian's "Default location for new attachments" setting.
@@ -106,11 +107,12 @@ func (p *Processor) ProcessFile(path string) (downloaded, cached, empty, errCoun
 		if dlErr != nil {
 			if p.refresh && hadLocalCopy[link.URL] {
 				// New download failed but the old file is still intact —
-				// keep existing annotation unchanged, only log.
+				// keep existing annotation and append refresh failure marker.
 				p.log.Printf("  REFRESH FAIL [%s] %s: %v — keeping existing copy", link.Kind, link.ID, dlErr)
+				annotations[link.URL] = annotationRefreshFailed
 				refreshFailed++
 			} else if errors.Is(dlErr, excalidraw.ErrEmptyCanvas) {
-				p.log.Printf("  EMPTY [room] %s: canvas vacío — data en otro browser", link.ID)
+				p.log.Printf("  EMPTY [room] %s: canvas empty — data may exist on another browser", link.ID)
 				annotations[link.URL] = annotationEmptyCanvas
 				empty++
 			} else {
@@ -221,10 +223,36 @@ func injectOne(content, url, annotation string, refresh bool) string {
 		// Check if already annotated right after the link.
 		trimmed := strings.TrimLeft(after, " \t")
 		if strings.HasPrefix(trimmed, "([[") {
-			if refresh {
+			if refresh && annotation == annotationRefreshFailed {
+				// Refresh failed but old local copy exists: keep ([[...]]) and append error marker.
+				if end := strings.Index(trimmed, "]])"); end >= 0 {
+					existing := trimmed[:end+3]
+					after = trimmed[end+3:]
+					rest := strings.TrimLeft(after, " \t")
+					if strings.HasPrefix(rest, annotationRefreshFailed) {
+						// Already marked — leave as-is.
+						b.WriteString(closeParen)
+						b.WriteString(" ")
+						b.WriteString(existing)
+					} else {
+						b.WriteString(closeParen)
+						b.WriteString(" ")
+						b.WriteString(existing)
+						b.WriteString(" ")
+						b.WriteString(annotationRefreshFailed)
+					}
+				} else {
+					b.WriteString(closeParen)
+				}
+			} else if refresh {
 				// Replace existing wikilink annotation ([[file|local copy DATE]]).
+				// Strip any trailing (⚠ refresh failed) if present.
 				if end := strings.Index(trimmed, "]])"); end >= 0 {
 					after = trimmed[end+3:]
+				}
+				rest := strings.TrimLeft(after, " \t")
+				if strings.HasPrefix(rest, annotationRefreshFailed) {
+					after = rest[len(annotationRefreshFailed):]
 				}
 				b.WriteString(closeParen)
 				b.WriteString(" ")

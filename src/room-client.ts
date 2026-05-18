@@ -8,6 +8,8 @@ import type { Link } from './link';
 
 const ROOM_WS_URL = 'wss://oss-collab.excalidraw.com/socket.io/?EIO=4&transport=websocket';
 
+const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024; // 50 MB
+
 // Time to get a broadcast from an already-populated room.
 const BROADCAST_TIMEOUT_MS = 30_000;
 // After an empty broadcast: wait for the next one.
@@ -38,7 +40,7 @@ export class RoomError extends Error {
  *
  * Does NOT open a browser. That responsibility belongs to the caller.
  */
-export function downloadRoom(link: Link, notify?: (msg: string) => void): Promise<Uint8Array> {
+export function downloadRoom(link: Link, notify?: (msg: string) => void, signal?: AbortSignal): Promise<Uint8Array> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(ROOM_WS_URL, {
       headers: { Origin: 'https://excalidraw.com' },
@@ -49,9 +51,11 @@ export function downloadRoom(link: Link, notify?: (msg: string) => void): Promis
 
     let pendingBinaryCount = 0;
     let binFrames: Buffer[] = [];
+    let binTotalBytes = 0;
     let isBroadcast = false;
 
     let timer: ReturnType<typeof setTimeout>;
+    let settled = false;
 
     function resetTimer(ms: number) {
       clearTimeout(timer);
@@ -62,6 +66,8 @@ export function downloadRoom(link: Link, notify?: (msg: string) => void): Promis
     }
 
     function done(result: Uint8Array | Error) {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       ws.close();
       result instanceof Uint8Array ? resolve(result) : reject(result);
@@ -69,21 +75,36 @@ export function downloadRoom(link: Link, notify?: (msg: string) => void): Promis
 
     resetTimer(BROADCAST_TIMEOUT_MS);
 
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timer);
+      ws.close();
+    }, { once: true });
+
     ws.on('error', (err) => {
       done(new RoomError(`WebSocket error: ${err.message}`, false));
+    });
+
+    ws.on('close', () => {
+      done(new RoomError('connection closed', false));
     });
 
     ws.on('message', async (data: Buffer | string, isBinary: boolean) => {
       try {
         // ── Binary frame ─────────────────────────────────────────────────
         if (isBinary) {
+          const frameSize = Buffer.byteLength(data as Buffer);
+          binTotalBytes += frameSize;
+          if (binTotalBytes > MAX_DOWNLOAD_BYTES) {
+            done(new RoomError(`accumulated broadcast data exceeds 50MB limit`, false));
+            return;
+          }
           binFrames.push(data as Buffer);
           if (binFrames.length < pendingBinaryCount) return;
 
           if (isBroadcast && binFrames.length >= 2) {
             const b0 = binFrames[0], b1 = binFrames[1];
-            const ciphertext = b0.buffer.slice(b0.byteOffset, b0.byteOffset + b0.byteLength);
-            const iv         = b1.buffer.slice(b1.byteOffset, b1.byteOffset + b1.byteLength);
+            const ciphertext = b0.buffer.slice(b0.byteOffset, b0.byteOffset + b0.byteLength) as ArrayBuffer;
+            const iv         = b1.buffer.slice(b1.byteOffset, b1.byteOffset + b1.byteLength) as ArrayBuffer;
 
             const plaintext = await decryptGCM(link.key, ciphertext, iv);
             const fileData  = buildExcalidrawFile(plaintext);
@@ -92,8 +113,9 @@ export function downloadRoom(link: Link, notify?: (msg: string) => void): Promis
               // Browser still initialising — reset timer and keep waiting.
               pendingBinaryCount = 0;
               binFrames = [];
+              binTotalBytes = 0;
               isBroadcast = false;
-              notify?.('Excalidraw: broadcast vacío, esperando…');
+              notify?.('Excalidraw: empty broadcast, waiting…');
               resetTimer(EMPTY_RETRY_TIMEOUT_MS);
               return;
             }
@@ -104,6 +126,7 @@ export function downloadRoom(link: Link, notify?: (msg: string) => void): Promis
           // Non-broadcast binary event — discard.
           pendingBinaryCount = 0;
           binFrames = [];
+          binTotalBytes = 0;
           isBroadcast = false;
           return;
         }
@@ -140,8 +163,12 @@ export function downloadRoom(link: Link, notify?: (msg: string) => void): Promis
             const n = parseInt(text.slice(2, dashIdx), 10);
             if (!isNaN(n) && n > 0) {
               pendingBinaryCount = n;
-              isBroadcast = text.slice(dashIdx + 1).includes('"client-broadcast"');
-              binFrames = [];
+              try {
+                const parts = JSON.parse(text.slice(dashIdx + 1));
+              isBroadcast = Array.isArray(parts) && parts[0] === 'client-broadcast';
+            } catch { isBroadcast = false; }
+            binFrames = [];
+            binTotalBytes = 0;
               return;
             }
           }
@@ -151,7 +178,7 @@ export function downloadRoom(link: Link, notify?: (msg: string) => void): Promis
         if (text.startsWith('42') && text.includes('"first-in-room"')) {
           // Room is empty — close immediately so the caller can open the browser
           // and wait before reconnecting.
-          done(new RoomError('first-in-room: sala vacía al conectar', true));
+          done(new RoomError('first-in-room: room was empty on connect', true));
         }
       } catch (err) {
         done(new RoomError(err instanceof Error ? err.message : String(err), false));

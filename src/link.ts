@@ -7,6 +7,7 @@ export interface Link {
   id: string;
   key: string;
   kind: Kind;
+  refresh?: boolean;
 }
 
 export function apiUrl(link: Link): string {
@@ -45,12 +46,18 @@ export function parseAll(content: string, refresh: boolean): Link[] {
       continue; // already annotated — skip
     }
 
-    links.push({
+    const link: Link = {
       url,
       kind: match[1] as Kind,
       id: match[2],
       key: match[3],
-    });
+    };
+
+    if (new RegExp(`\\(\\[\\[excalidraw-${link.id}\\.excalidraw\\|`).test(content)) {
+      link.refresh = true;
+    }
+
+    links.push(link);
   }
 
   return links;
