@@ -73,7 +73,7 @@ export default class ExcalidrawDownloaderPlugin extends Plugin {
     if (this.settings.attachmentFolderOverride) {
       return normalizePath(this.settings.attachmentFolderOverride);
     }
-    return (this.app as any).getConfig?.('attachmentFolderPath') ?? '';
+    return (this.app.vault as any).getConfig?.('attachmentFolderPath') ?? '';
   }
 
   async processFile(file: TFile, refresh: boolean): Promise<void> {
