@@ -37,6 +37,7 @@ export default class ExcalidrawDownloaderPlugin extends Plugin {
   private progressNotice: Notice | undefined;
 
   async onload() {
+    console.log('[Excalidraw Downloader] Plugin loaded');
     await this.loadSettings();
 
     this.addCommand({
@@ -72,13 +73,14 @@ export default class ExcalidrawDownloaderPlugin extends Plugin {
     if (this.settings.attachmentFolderOverride) {
       return normalizePath(this.settings.attachmentFolderOverride);
     }
-    return this.app.getConfig('attachmentFolderPath') ?? '';
+    return (this.app as any).getConfig?.('attachmentFolderPath') ?? '';
   }
 
   async processFile(file: TFile, refresh: boolean): Promise<void> {
     const signal = this.abortController.signal;
     const content = await this.app.vault.read(file);
     const links = parseAll(content, refresh);
+    console.log(`[Excalidraw Downloader] Found ${links.length} links in ${file.basename}`);
 
     if (links.length === 0) {
       new Notice(`No ${refresh ? 'refreshable' : 'new'} Excalidraw links in ${file.basename}.`);
