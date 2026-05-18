@@ -1,0 +1,19 @@
+{
+  "name": "excalidraw-link-downloader",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/ws": "^8.5.0",
+    "esbuild": "^0.21.0",
+    "obsidian": "latest",
+    "typescript": "^5.0.0"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "id": "excalidraw-link-downloader",
+  "name": "Excalidraw Link Downloader",
+  "version": "1.0.0",
+  "minAppVersion": "1.4.0",
+  "description": "Downloads Excalidraw shared scenes and rooms to local .excalidraw files and injects a local-copy annotation next to each link.",
+  "author": "aranajuan",
+  "repo": "https://github.com/aranajuan/obsidian-excalidraw-link-downloader",
+  "isDesktopOnly": true
+}
